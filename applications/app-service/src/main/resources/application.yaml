@@ -1,0 +1,37 @@
+server:
+  port: 8080
+spring:
+  application:
+    name: "GGastos"
+  devtools:
+    add-properties: false
+  h2:
+    console:
+      enabled: true
+      path: "/h2"
+  profiles:
+    active: "local"
+  data:
+    mongodb:
+      uri: "mongodb://mongo:josVTGQVOVyOauEfYUEQYmostzfNmJqF@yamabiko.proxy.rlwy.net:33234"
+      database: "ggastos-db"
+      auto-index-creation: true
+jwt:
+  secret: "${JWT_SECRET:BU4B1nghWq7ddqXkVeJD_seguro_para_jwt_de_32_caracteres}"
+email:
+  username: "${EMAIL_NAME:yeridstickramirez@gmail.com}"
+  password: "${PASSWORD_EMAIL:hzxx rvww ncht qyfq}"
+security:
+  admin:
+    email: "${ADMIN_EMAIL:ejemploadmin@gmail.com}"
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "health,prometheus"
+  endpoint:
+    health:
+      probes:
+        enabled: true
+cors:
+  allowed-origins: "http://localhost:4200,http://localhost:8080,http://localhost:3000/"
