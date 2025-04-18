@@ -1,10 +1,10 @@
 package dev.yerid.api;
 
-import dev.yerid.model.user.gateways.UserRepository;
+import dev.yerid.api.config.RateLimiter;
+import dev.yerid.model.common.dto.SyncRequestDTO;
+import dev.yerid.model.common.dto.SyncResponseDTO;
 import dev.yerid.usecase.sync.SyncUseCase;
-import lombok.RequiredArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.server.ServerRequest;
@@ -12,78 +12,182 @@ import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Mono;
 
 import java.util.Map;
+import java.util.logging.Logger;
 
 @Component
-@RequiredArgsConstructor
 public class SyncHandler {
-    private static final Logger log = LoggerFactory.getLogger(SyncHandler.class);
+    private static final Logger logger = Logger.getLogger(SyncHandler.class.getName());
     private final SyncUseCase syncUseCase;
-    private final UserRepository userRepository; // Inyecta tu repositorio de usuario existente
+    private final RateLimiter rateLimiter;
+
+    public SyncHandler(SyncUseCase syncUseCase, RateLimiter rateLimiter) {
+        this.syncUseCase = syncUseCase;
+        this.rateLimiter = rateLimiter;
+    }
 
     public Mono<ServerResponse> uploadData(ServerRequest request) {
-        return request.bodyToMono(SyncDataRequest.class)
-                .flatMap(syncData -> {
-                    String email = syncData.email();
-                    log.info("Recibida solicitud de sincronización para usuario con email: {}", email);
+        logger.info("Recibida solicitud para sincronizar datos");
 
-                    // Usar tu adaptador existente para obtener el usuario por email
-                    return userRepository.findByEmail(email)
-                            .flatMap(user -> {
-                                String userId = user.getId();
-                                log.info("Usuario encontrado: {}, procesando sincronización", userId);
+        // Obtener el token del encabezado de autorización
+        String authToken = request.headers().firstHeader("Authorization");
+        if (authToken != null && authToken.startsWith("Bearer ")) {
+            authToken = authToken.substring(7);
+        }
 
-                                return syncUseCase.processSyncData(
-                                                userId,
-                                                syncData.data(),
-                                                syncData.timestamp()
-                                        )
-                                        .then(ServerResponse.ok().build());
-                            })
-                            .switchIfEmpty(
-                                    ServerResponse.badRequest()
-                                            .bodyValue(new ErrorResponse("Usuario no encontrado con email: " + email))
-                            );
+        final String sessionToken = authToken;
+
+        return request.bodyToMono(SyncRequestDTO.class)
+                .doOnNext(dto -> logger.info("Recibida petición de sincronización de usuario: " + dto.getEmail()))
+                .flatMap(dto -> {
+                    // Extrae datos de sincronización
+                    String email = dto.getEmail();
+
+                    // Verificar límite de tasa para este usuario
+                    return rateLimiter.isRateLimited(email)
+                            .flatMap(isLimited -> {
+                                if (isLimited) {
+                                    logger.warning("Límite de tasa excedido para usuario: " + email);
+                                    return ServerResponse.status(HttpStatus.TOO_MANY_REQUESTS)
+                                            .contentType(MediaType.APPLICATION_JSON)
+                                            .bodyValue(Map.of(
+                                                    "error", "Demasiadas solicitudes",
+                                                    "message", "Por favor, espere un momento antes de intentar de nuevo."
+                                            ));
+                                }
+
+                                // Verificar si es la sesión activa
+                                if (sessionToken != null && !rateLimiter.isActiveSession(email, sessionToken)) {
+                                    // Registrar esta como la nueva sesión activa
+                                    rateLimiter.registerSession(email, sessionToken);
+
+                                    // Opcional: Puedes notificar que esta es una nueva sesión activa
+                                    logger.info("Nueva sesión activa para usuario: " + email);
+                                }
+
+                                Map<String, Object> data = dto.getData();
+                                Map<String, Object> eliminados = dto.getEliminados();
+                                long timestamp = dto.getTimestamp();
+
+                                logger.info("Procesando datos para: " + email);
+
+                                // Procesar ambos: datos regulares y elementos eliminados
+                                return syncUseCase.processSyncData(email, data, eliminados, timestamp)
+                                        .then(Mono.just(Map.of(
+                                                "status", "success",
+                                                "timestamp", timestamp,
+                                                "sessionActive", true
+                                        )))
+                                        .flatMap(response -> ServerResponse.ok()
+                                                .contentType(MediaType.APPLICATION_JSON)
+                                                .bodyValue(response));
+                            });
                 })
-                .onErrorResume(e -> {
-                    log.error("Error en sincronización: {}", e.getMessage());
+                .onErrorResume(error -> {
+                    logger.severe("Error al procesar sincronización: " + error.getMessage());
                     return ServerResponse.badRequest()
-                            .bodyValue(new ErrorResponse(e.getMessage()));
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .bodyValue(Map.of(
+                                    "error", "Error al procesar sincronización",
+                                    "message", error.getMessage()
+                            ));
                 });
     }
 
     public Mono<ServerResponse> downloadData(ServerRequest request) {
-        String email = request.queryParam("userId")
-                .orElseThrow(() -> new IllegalArgumentException("Email es requerido"));
+        logger.info("Recibida solicitud para descargar datos");
 
-        long since = request.queryParam("since")
-                .map(Long::parseLong)
-                .orElse(0L);
+        // Obtener el token del encabezado de autorización
+        String authToken = request.headers().firstHeader("Authorization");
+        if (authToken != null && authToken.startsWith("Bearer ")) {
+            authToken = authToken.substring(7);
+        }
 
-        log.info("Recibida solicitud de descarga para usuario con email: {}, desde: {}", email, since);
+        final String sessionToken = authToken;
 
-        // Usar tu adaptador existente para obtener el usuario por email
-        return userRepository.findByEmail(email)
-                .flatMap(user -> {
-                    String userId = user.getId();
-                    log.info("Usuario encontrado: {}, descargando datos", userId);
+        // Obtener parámetros de la consulta
+        String userId = request.queryParam("userId").orElse("");
+        long since = request.queryParam("since").map(Long::parseLong).orElse(0L);
+
+        if (userId.isEmpty()) {
+            return ServerResponse.badRequest()
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(Map.of("error", "El userId es requerido"));
+        }
+
+        logger.info("Descargando datos para usuario: " + userId + " desde timestamp: " + since);
+
+        // Verificar límite de tasa para este usuario
+        return rateLimiter.isRateLimited(userId)
+                .flatMap(isLimited -> {
+                    if (isLimited) {
+                        logger.warning("Límite de tasa excedido para usuario: " + userId);
+                        return ServerResponse.status(HttpStatus.TOO_MANY_REQUESTS)
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .bodyValue(Map.of(
+                                        "error", "Demasiadas solicitudes",
+                                        "message", "Por favor, espere un momento antes de intentar de nuevo."
+                                ));
+                    }
+
+                    // Verificar si es la sesión activa
+                    if (sessionToken != null && !rateLimiter.isActiveSession(userId, sessionToken)) {
+                        // Registrar esta como la nueva sesión activa
+                        rateLimiter.registerSession(userId, sessionToken);
+
+                        // Opcional: Puedes notificar que esta es una nueva sesión activa
+                        logger.info("Nueva sesión activa para usuario: " + userId);
+                    }
 
                     return syncUseCase.getUserData(userId, since)
-                            .flatMap(data -> ServerResponse.ok()
+                            .map(data -> {
+                                SyncResponseDTO response = new SyncResponseDTO();
+                                response.setData(data);
+                                response.setTimestamp(System.currentTimeMillis());
+                                response.setSessionActive(true);
+                                return response;
+                            })
+                            .flatMap(response -> ServerResponse.ok()
                                     .contentType(MediaType.APPLICATION_JSON)
-                                    .bodyValue(data));
+                                    .bodyValue(response));
                 })
-                .switchIfEmpty(
-                        ServerResponse.badRequest()
-                                .bodyValue(new ErrorResponse("Usuario no encontrado con email: " + email))
-                )
-                .onErrorResume(e -> {
-                    log.error("Error al obtener datos: {}", e.getMessage());
+                .onErrorResume(error -> {
+                    logger.severe("Error al descargar datos: " + error.getMessage());
                     return ServerResponse.badRequest()
-                            .bodyValue(new ErrorResponse(e.getMessage()));
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .bodyValue(Map.of(
+                                    "error", "Error al descargar datos",
+                                    "message", error.getMessage()
+                            ));
                 });
     }
 
-    // Ahora recibimos el email en vez del userId
-    public record SyncDataRequest(String email, Map<String, Object> data, long timestamp) {}
-    public record ErrorResponse(String message) {}
+    // Endpoint adicional para cerrar sesión explícitamente
+    public Mono<ServerResponse> closeSession(ServerRequest request) {
+        String authToken = request.headers().firstHeader("Authorization");
+        if (authToken != null && authToken.startsWith("Bearer ")) {
+            authToken = authToken.substring(7);
+        }
+
+        final String sessionToken = authToken;
+
+        return request.bodyToMono(Map.class)
+                .flatMap(body -> {
+                    String userId = (String) body.get("email");
+
+                    if (userId == null || userId.isEmpty()) {
+                        return ServerResponse.badRequest()
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .bodyValue(Map.of("error", "El email es requerido"));
+                    }
+
+                    rateLimiter.closeSession(userId, sessionToken);
+
+                    return ServerResponse.ok()
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .bodyValue(Map.of(
+                                    "status", "success",
+                                    "message", "Sesión cerrada correctamente"
+                            ));
+                });
+    }
 }

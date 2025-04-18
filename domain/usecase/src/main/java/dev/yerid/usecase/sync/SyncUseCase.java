@@ -43,9 +43,9 @@ public class SyncUseCase {
     }
 
     /**
-     * Procesa los datos de sincronización desde el cliente con mejor manejo de errores y ejecución independiente
+     * Procesa los datos de sincronización desde el cliente con soporte para elementos eliminados
      */
-    public Mono<Void> processSyncData(String userId, Map<String, Object> data, long timestamp) {
+    public Mono<Void> processSyncData(String userId, Map<String, Object> data, Map<String, Object> eliminados, long timestamp) {
         logInfo("Iniciando sincronización de datos para usuario: " + userId + " con timestamp: " + timestamp);
 
         // Validar userId
@@ -59,6 +59,11 @@ public class SyncUseCase {
         List<Map<String, Object>> gastos = (List<Map<String, Object>>) data.get("ObjetosGastos");
         logInfo("Gastos recibidos: " + (gastos != null ? gastos.size() : 0));
 
+        // Verificar si hay elementos para eliminar
+        @SuppressWarnings("unchecked")
+        List<Object> gastosEliminados = eliminados != null ? (List<Object>) eliminados.get("ObjetosGastos") : null;
+        logInfo("Gastos para eliminar: " + (gastosEliminados != null ? gastosEliminados.size() : 0));
+
         if (gastos != null && !gastos.isEmpty()) {
             for (Map<String, Object> gasto : gastos) {
                 logDebug("Gasto recibido - ID: " + gasto.get("id") +
@@ -68,10 +73,13 @@ public class SyncUseCase {
             }
         }
 
-        // En lugar de usar Mono.zip que requiere que todos los procesos tengan éxito,
-        // usaremos ejecución independiente para cada tipo de datos
+        // Primero procesamos los elementos eliminados si existen
+        Mono<Void> processEliminados = processDeletedItems(userId, eliminados)
+                .doOnSuccess(v -> logInfo("Procesamiento de elementos eliminados completado"))
+                .doOnError(e -> logError("Error en procesamiento de elementos eliminados", e))
+                .onErrorResume(e -> Mono.empty()); // Continuar aunque falle este proceso
 
-        // Primero, procesamos cada tipo de datos independientemente
+        // Luego procesamos los datos normales
         Mono<Void> processGastos = processExpenses(userId, getListFromData(data, "ObjetosGastos"))
                 .doOnSuccess(v -> logInfo("Procesamiento de gastos completado"))
                 .doOnError(e -> logError("Error en procesamiento de gastos", e))
@@ -102,8 +110,10 @@ public class SyncUseCase {
                 .doOnError(e -> logError("Error en procesamiento de ingresos extra", e))
                 .onErrorResume(e -> Mono.empty());
 
-        // Luego ejecutamos todos, pero permitiendo que continúen aunque alguno falle
+        // Ejecutamos todos los procesos, pero permitiendo que continúen aunque alguno falle
+        // Primero ejecutamos los eliminados, luego el resto
         return Mono.whenDelayError(
+                        processEliminados,
                         processGastos,
                         processAhorro,
                         processCategorias,
@@ -113,6 +123,227 @@ public class SyncUseCase {
                 )
                 .doOnSuccess(v -> logInfo("Sincronización completada para usuario: " + userId))
                 .doOnError(e -> logError("Error general en sincronización para usuario: " + userId, e));
+    }
+
+    /**
+     * Procesa los elementos eliminados recibidos en la sincronización
+     */
+    private Mono<Void> processDeletedItems(String userId, Map<String, Object> eliminados) {
+        if (eliminados == null || eliminados.isEmpty()) {
+            logInfo("No hay elementos eliminados para procesar");
+            return Mono.empty();
+        }
+
+        logInfo("Procesando elementos eliminados para el usuario: " + userId);
+
+        // Procesar IDs de gastos eliminados
+        Mono<Void> processDeletedExpenses = processDeletedExpenses(userId, getListOfObjects(eliminados, "ObjetosGastos"))
+                .doOnSuccess(v -> logInfo("Procesamiento de gastos eliminados completado"))
+                .doOnError(e -> logError("Error en procesamiento de gastos eliminados", e))
+                .onErrorResume(e -> Mono.empty());
+
+        // AÑADIR ESTO: Procesar IDs de categorías eliminadas
+        Mono<Void> processDeletedCategories = processDeletedCategories(userId, getListOfObjects(eliminados, "categorias"))
+                .doOnSuccess(v -> logInfo("Procesamiento de categorías eliminadas completado"))
+                .doOnError(e -> logError("Error en procesamiento de categorías eliminadas", e))
+                .onErrorResume(e -> Mono.empty());
+
+        Mono<Void> processDeletedReminders = processDeletedReminders(userId, getListOfObjects(eliminados, "recordatorios"))
+                .doOnSuccess(v -> logInfo("Procesamiento de recordatorios eliminados completado"))
+                .doOnError(e -> logError("Error en procesamiento de recordatorios eliminados", e))
+                .onErrorResume(e -> Mono.empty());
+
+        Mono<Void> processDeletedSavingsGoals = processDeletedSavingsGoals(userId, getListOfObjects(eliminados, "MetasAhorro"))
+                .doOnSuccess(v -> logInfo("Procesamiento de metas de ahorro eliminadas completado"))
+                .doOnError(e -> logError("Error en procesamiento de metas de ahorro eliminadas", e))
+                .onErrorResume(e -> Mono.empty());
+
+        // Incluir el nuevo proceso en el when
+        return Mono.whenDelayError(
+                processDeletedExpenses,
+                processDeletedCategories,
+                processDeletedReminders,
+                processDeletedSavingsGoals
+        );
+    }
+
+    /**
+     * Procesa los IDs de metas de ahorro eliminadas
+     */
+    private Mono<Void> processDeletedSavingsGoals(String userId, List<Object> metasIds) {
+        if (metasIds == null || metasIds.isEmpty()) {
+            logInfo("No hay IDs de metas de ahorro eliminadas para procesar");
+            return Mono.empty();
+        }
+
+        logInfo("Procesando " + metasIds.size() + " IDs de metas de ahorro eliminadas para el usuario: " + userId);
+
+        return Flux.fromIterable(metasIds)
+                .doOnNext(id -> logDebug("Procesando eliminación de meta de ahorro con ID: " + id))
+                .flatMap(id -> {
+                    String strId = id.toString();
+                    logInfo("Eliminando meta de ahorro con ID: " + strId);
+
+                    // Primero verificamos que la meta pertenezca al usuario correcto
+                    return savingsGoalRepository.findById(strId)
+                            .flatMap(goal -> {
+                                // Si la meta no pertenece al usuario, no la eliminamos
+                                if (!userId.equals(goal.getUserId())) {
+                                    logInfo("No se elimina meta de ahorro ID " + strId +
+                                            " porque pertenece a otro usuario: " + goal.getUserId());
+                                    return Mono.empty();
+                                }
+
+                                logInfo("Confirmado: la meta de ahorro ID " + strId +
+                                        " pertenece al usuario " + userId + ". Procediendo a eliminar.");
+                                return savingsGoalRepository.deleteById(strId)
+                                        .doOnSuccess(v -> logInfo("Meta de ahorro eliminada: " + strId))
+                                        .doOnError(error -> logError("Error al eliminar meta de ahorro: " + strId, error));
+                            })
+                            .onErrorResume(error -> {
+                                logError("Error al buscar meta de ahorro para eliminar: " + strId, error);
+                                return Mono.empty();
+                            });
+                })
+                .then();
+    }
+
+    /**
+     * Procesa los IDs de recordatorios eliminados
+     */
+    private Mono<Void> processDeletedReminders(String userId, List<Object> recordatoriosIds) {
+        if (recordatoriosIds == null || recordatoriosIds.isEmpty()) {
+            logInfo("No hay IDs de recordatorios eliminados para procesar");
+            return Mono.empty();
+        }
+
+        logInfo("Procesando " + recordatoriosIds.size() + " IDs de recordatorios eliminados para el usuario: " + userId);
+
+        return Flux.fromIterable(recordatoriosIds)
+                .doOnNext(id -> logDebug("Procesando eliminación de recordatorio con ID: " + id))
+                .flatMap(id -> {
+                    String strId = id.toString();
+                    logInfo("Eliminando recordatorio con ID: " + strId);
+
+                    // Primero verificamos que el recordatorio pertenezca al usuario correcto
+                    return reminderRepository.findById(strId)
+                            .flatMap(reminder -> {
+                                // Si el recordatorio no pertenece al usuario, no lo eliminamos
+                                if (!userId.equals(reminder.getUserId())) {
+                                    logInfo("No se elimina recordatorio ID " + strId +
+                                            " porque pertenece a otro usuario: " + reminder.getUserId());
+                                    return Mono.empty();
+                                }
+
+                                logInfo("Confirmado: el recordatorio ID " + strId +
+                                        " pertenece al usuario " + userId + ". Procediendo a eliminar.");
+                                return reminderRepository.deleteById(strId)
+                                        .doOnSuccess(v -> logInfo("Recordatorio eliminado: " + strId))
+                                        .doOnError(error -> logError("Error al eliminar recordatorio: " + strId, error));
+                            })
+                            .onErrorResume(error -> {
+                                logError("Error al buscar recordatorio para eliminar: " + strId, error);
+                                return Mono.empty();
+                            });
+                })
+                .then();
+    }
+
+    /**
+     * Procesa los IDs de categorías eliminadas
+     */
+    private Mono<Void> processDeletedCategories(String userId, List<Object> categoriasIds) {
+        if (categoriasIds == null || categoriasIds.isEmpty()) {
+            logInfo("No hay IDs de categorías eliminadas para procesar");
+            return Mono.empty();
+        }
+
+        logInfo("Procesando " + categoriasIds.size() + " IDs de categorías eliminadas para el usuario: " + userId);
+
+        return Flux.fromIterable(categoriasIds)
+                .doOnNext(id -> logDebug("Procesando eliminación de categoría con ID: " + id))
+                .flatMap(id -> {
+                    String strId = id.toString();
+                    logInfo("Eliminando categoría con ID: " + strId);
+
+                    // Primero verificamos que la categoría pertenezca al usuario correcto
+                    return categoriesRepository.findById(strId)
+                            .flatMap(category -> {
+                                // Si la categoría no pertenece al usuario, no la eliminamos
+                                if (!userId.equals(category.getUserId())) {
+                                    logInfo("No se elimina categoría ID " + strId +
+                                            " porque pertenece a otro usuario: " + category.getUserId());
+                                    return Mono.empty();
+                                }
+
+                                logInfo("Confirmado: la categoría ID " + strId +
+                                        " pertenece al usuario " + userId + ". Procediendo a eliminar.");
+                                return categoriesRepository.deleteById(strId)
+                                        .doOnSuccess(v -> logInfo("Categoría eliminada: " + strId))
+                                        .doOnError(error -> logError("Error al eliminar categoría: " + strId, error));
+                            })
+                            .onErrorResume(error -> {
+                                logError("Error al buscar categoría para eliminar: " + strId, error);
+                                return Mono.empty();
+                            });
+                })
+                .then();
+    }
+
+    /**
+     * Procesa los IDs de gastos eliminados
+     */
+    private Mono<Void> processDeletedExpenses(String userId, List<Object> gastosIds) {
+        if (gastosIds == null || gastosIds.isEmpty()) {
+            logInfo("No hay IDs de gastos eliminados para procesar");
+            return Mono.empty();
+        }
+
+        logInfo("Procesando " + gastosIds.size() + " IDs de gastos eliminados para el usuario: " + userId);
+
+        return Flux.fromIterable(gastosIds)
+                .doOnNext(id -> logDebug("Procesando eliminación de gasto con ID: " + id))
+                .flatMap(id -> {
+                    String strId = id.toString();
+                    logInfo("Eliminando gasto con ID: " + strId);
+
+                    // Primero verificamos que el gasto pertenezca al usuario correcto
+                    return expensesRepository.findById(strId)
+                            .flatMap(expense -> {
+                                // Si el gasto no pertenece al usuario, no lo eliminamos
+                                if (!userId.equals(expense.getUserId())) {
+                                    logInfo("No se elimina gasto ID " + strId +
+                                            " porque pertenece a otro usuario: " + expense.getUserId());
+                                    return Mono.empty();
+                                }
+
+                                logInfo("Confirmado: el gasto ID " + strId +
+                                        " pertenece al usuario " + userId + ". Procediendo a eliminar.");
+                                return expensesRepository.deleteById(strId)
+                                        .doOnSuccess(v -> logInfo("Gasto eliminado: " + strId))
+                                        .doOnError(error -> logError("Error al eliminar gasto: " + strId, error));
+                            })
+                            .onErrorResume(error -> {
+                                logError("Error al buscar gasto para eliminar: " + strId, error);
+                                return Mono.empty();
+                            });
+                })
+                .then();
+    }
+
+    /**
+     * Obtiene una lista de objetos de un mapa
+     */
+    @SuppressWarnings("unchecked")
+    private List<Object> getListOfObjects(Map<String, Object> data, String key) {
+        if (data != null && data.containsKey(key)) {
+            List<Object> result = (List<Object>) data.get(key);
+            logDebug("Extrayendo lista de " + key + " para eliminar, encontrados: " +
+                    (result != null ? result.size() : 0) + " elementos");
+            return result;
+        }
+        logDebug("Clave " + key + " no encontrada o vacía en los datos eliminados");
+        return List.of();
     }
 
     /**

@@ -23,6 +23,7 @@ public class RouterRest {
                 // Rutas de sincronización
                 .andRoute(POST("/api/sync/upload"), syncHandler::uploadData)
                 .andRoute(GET("/api/sync/download"), syncHandler::downloadData)
+                .andRoute(POST("/api/sync/close-session"), syncHandler::closeSession)
                 // Ruta de prueba para gastos
                 .andRoute(POST("/api/test/expense"), testHandler::createTestExpense);
     }
