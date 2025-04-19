@@ -21,7 +21,7 @@ FROM eclipse-temurin:17-jdk-alpine
 
 WORKDIR /app
 
-COPY --from=builder /app/applications/app-service/build/libs/GGastos.jar app.jar
+COPY --from=builder /app/applications/app-service/build/libs/GGastos.jar GGastos.jar
 
 # Exponer el puerto configurado desde Railway (SERVER_PORT)
 EXPOSE 8080
