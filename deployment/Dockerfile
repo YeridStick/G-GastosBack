@@ -14,14 +14,14 @@ RUN apk add --no-cache bash
 
 RUN ./gradlew :app-service:bootJar -x test -x validateStructure && \
     ls -la applications/app-service/build/libs/ && \
-    if [ ! -f applications/app-service/build/libs/portafolio.jar ]; then echo "JAR no encontrado" && exit 1; fi
+    if [ ! -f applications/app-service/build/libs/GGastos.jar ]; then echo "JAR no encontrado" && exit 1; fi
 
 # Etapa de ejecución
 FROM eclipse-temurin:17-jdk-alpine
 
 WORKDIR /app
 
-COPY --from=builder /app/applications/app-service/build/libs/portafolio.jar app.jar
+COPY --from=builder /app/applications/app-service/build/libs/GGastos.jar app.jar
 
 # Exponer el puerto configurado desde Railway (SERVER_PORT)
 EXPOSE 8080
