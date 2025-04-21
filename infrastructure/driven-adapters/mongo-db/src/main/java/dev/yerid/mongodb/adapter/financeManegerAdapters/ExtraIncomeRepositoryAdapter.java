@@ -22,8 +22,7 @@ public class ExtraIncomeRepositoryAdapter implements ExtraIncomeRepository {
 
     @Override
     public Flux<ExtraIncome> findByUserIdAndUpdatedSince(String userId, long timestamp) {
-        // Usando fecha como campo de referencia
-        return repository.findByUserIdAndFechaGreaterThanEqual(userId, timestamp)
+        return repository.findByUserId(userId)
                 .map(this::toEntity);
     }
 
