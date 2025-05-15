@@ -14,6 +14,9 @@ import reactor.core.publisher.Mono;
 import java.util.Map;
 import java.util.logging.Logger;
 
+/**
+ * Manejador de endpoints para sincronización de datos entre cliente y servidor
+ */
 @Component
 public class SyncHandler {
     private static final Logger logger = Logger.getLogger(SyncHandler.class.getName());
@@ -25,6 +28,9 @@ public class SyncHandler {
         this.rateLimiter = rateLimiter;
     }
 
+    /**
+     * Endpoint para recibir datos desde el cliente (sincronización ascendente)
+     */
     public Mono<ServerResponse> uploadData(ServerRequest request) {
         logger.info("Recibida solicitud para sincronizar datos");
 
@@ -37,7 +43,9 @@ public class SyncHandler {
         final String sessionToken = authToken;
 
         return request.bodyToMono(SyncRequestDTO.class)
-                .doOnNext(dto -> logger.info("Recibida petición de sincronización de usuario: " + dto.getEmail()))
+                .doOnNext(dto -> logger.info("Recibida petición de sincronización de usuario: " + dto.getEmail() +
+                        ", datos: " + (dto.getData() != null ? dto.getData().size() : 0) + " elementos, " +
+                        "eliminados: " + (dto.getEliminados() != null ? dto.getEliminados().size() : 0) + " elementos"))
                 .flatMap(dto -> {
                     // Extrae datos de sincronización
                     String email = dto.getEmail();
@@ -59,8 +67,6 @@ public class SyncHandler {
                                 if (sessionToken != null && !rateLimiter.isActiveSession(email, sessionToken)) {
                                     // Registrar esta como la nueva sesión activa
                                     rateLimiter.registerSession(email, sessionToken);
-
-                                    // Opcional: Puedes notificar que esta es una nueva sesión activa
                                     logger.info("Nueva sesión activa para usuario: " + email);
                                 }
 
@@ -68,9 +74,9 @@ public class SyncHandler {
                                 Map<String, Object> eliminados = dto.getEliminados();
                                 long timestamp = dto.getTimestamp();
 
-                                logger.info("Procesando datos para: " + email);
+                                logger.info("Procesando datos para: " + email + " con timestamp: " + timestamp);
 
-                                // Procesar ambos: datos regulares y elementos eliminados
+                                // Usando el caso de uso refactorizado para procesar todos los datos en una operación
                                 return syncUseCase.processSyncData(email, data, eliminados, timestamp)
                                         .then(Mono.just(Map.of(
                                                 "status", "success",
@@ -79,7 +85,8 @@ public class SyncHandler {
                                         )))
                                         .flatMap(response -> ServerResponse.ok()
                                                 .contentType(MediaType.APPLICATION_JSON)
-                                                .bodyValue(response));
+                                                .bodyValue(response))
+                                        .doOnSuccess(resp -> logger.info("Datos sincronizados correctamente para: " + email));
                             });
                 })
                 .onErrorResume(error -> {
@@ -93,6 +100,9 @@ public class SyncHandler {
                 });
     }
 
+    /**
+     * Endpoint para enviar datos al cliente (sincronización descendente)
+     */
     public Mono<ServerResponse> downloadData(ServerRequest request) {
         logger.info("Recibida solicitud para descargar datos");
 
@@ -133,25 +143,48 @@ public class SyncHandler {
                     if (sessionToken != null && !rateLimiter.isActiveSession(userId, sessionToken)) {
                         // Registrar esta como la nueva sesión activa
                         rateLimiter.registerSession(userId, sessionToken);
-
-                        // Opcional: Puedes notificar que esta es una nueva sesión activa
                         logger.info("Nueva sesión activa para usuario: " + userId);
                     }
 
+                    // Usando el caso de uso refactorizado para obtener todos los datos en una operación
                     return syncUseCase.getUserData(userId, since)
                             .map(data -> {
                                 SyncResponseDTO response = new SyncResponseDTO();
                                 response.setData(data);
                                 response.setTimestamp(System.currentTimeMillis());
                                 response.setSessionActive(true);
+
+                                // Log con información sobre la cantidad de datos enviados
+                                if (data != null) {
+                                    int totalItems = 0;
+                                    if (data.containsKey("ObjetosGastos") && data.get("ObjetosGastos") instanceof java.util.List) {
+                                        totalItems += ((java.util.List<?>) data.get("ObjetosGastos")).size();
+                                    }
+                                    if (data.containsKey("categorias") && data.get("categorias") instanceof java.util.List) {
+                                        totalItems += ((java.util.List<?>) data.get("categorias")).size();
+                                    }
+                                    if (data.containsKey("MetasAhorro") && data.get("MetasAhorro") instanceof java.util.List) {
+                                        totalItems += ((java.util.List<?>) data.get("MetasAhorro")).size();
+                                    }
+                                    if (data.containsKey("recordatorios") && data.get("recordatorios") instanceof java.util.List) {
+                                        totalItems += ((java.util.List<?>) data.get("recordatorios")).size();
+                                    }
+                                    if (data.containsKey("IngresosExtra") && data.get("IngresosExtra") instanceof java.util.List) {
+                                        totalItems += ((java.util.List<?>) data.get("IngresosExtra")).size();
+                                    }
+
+                                    logger.info("Enviando " + totalItems + " elementos en total al cliente para el usuario: " + userId);
+                                }
+
                                 return response;
                             })
                             .flatMap(response -> ServerResponse.ok()
                                     .contentType(MediaType.APPLICATION_JSON)
-                                    .bodyValue(response));
+                                    .bodyValue(response))
+                            .doOnSuccess(resp -> logger.info("Datos enviados correctamente a cliente para: " + userId));
                 })
                 .onErrorResume(error -> {
-                    logger.severe("Error al descargar datos: " + error.getMessage());
+                    logger.severe("Error al descargar datos: " + error.getMessage() + " - " + error.getClass().getName());
                     return ServerResponse.badRequest()
                             .contentType(MediaType.APPLICATION_JSON)
                             .bodyValue(Map.of(
@@ -161,8 +194,12 @@ public class SyncHandler {
                 });
     }
 
-    // Endpoint adicional para cerrar sesión explícitamente
+    /**
+     * Endpoint para cerrar sesión explícitamente
+     */
     public Mono<ServerResponse> closeSession(ServerRequest request) {
+        logger.info("Recibida solicitud para cerrar sesión");
+
         String authToken = request.headers().firstHeader("Authorization");
         if (authToken != null && authToken.startsWith("Bearer ")) {
             authToken = authToken.substring(7);
@@ -180,6 +217,7 @@ public class SyncHandler {
                                 .bodyValue(Map.of("error", "El email es requerido"));
                     }
 
+                    logger.info("Cerrando sesión para usuario: " + userId);
                     rateLimiter.closeSession(userId, sessionToken);
 
                     return ServerResponse.ok()
@@ -187,7 +225,8 @@ public class SyncHandler {
                             .bodyValue(Map.of(
                                     "status", "success",
                                     "message", "Sesión cerrada correctamente"
-                            ));
+                            ))
+                            .doOnSuccess(resp -> logger.info("Sesión cerrada correctamente para: " + userId));
                 });
     }
 }

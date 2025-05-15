@@ -11,9 +11,7 @@ import org.springframework.data.mongodb.core.mapping.Document;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Document(collection = "reminders")
 public class ReminderData {
-    @Id
     private String id;
     private String titulo;
     private String descripcion;
@@ -25,5 +23,4 @@ public class ReminderData {
     private int diasAnticipacion;
     private Long fechaCreacion;
     private String estado;
-    private String userId;
 }

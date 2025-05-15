@@ -4,16 +4,12 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.mapping.Document;
 
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Document(collection = "savingsGoals")
 public class SavingsGoalData {
-    @Id
     private String id;
     private String nombre;
     private double monto;
@@ -26,5 +22,4 @@ public class SavingsGoalData {
     private double ahorroAnual;
     private int diasRestantes;
     private boolean completada;
-    private String userId;
 }
