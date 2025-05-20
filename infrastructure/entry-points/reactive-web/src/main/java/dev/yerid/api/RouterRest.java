@@ -12,7 +12,7 @@ import static org.springframework.web.reactive.function.server.RouterFunctions.r
 @Configuration
 public class RouterRest {
     @Bean
-    public RouterFunction<ServerResponse> routerFunction(Handler handler, SyncHandler syncHandler, TestHandler testHandler) {
+    public RouterFunction<ServerResponse> routerFunction(Handler handler, SyncHandler syncHandler) {
         return route(GET("/api/usecase/path"), handler::listenGETUseCase)
                 .andRoute(POST("/api/usecase/otherpath"), handler::listenPOSTUseCase)
                 .andRoute(GET("/api/otherusercase/path"), handler::listenGETOtherUseCase)
@@ -23,8 +23,6 @@ public class RouterRest {
                 // Rutas de sincronización
                 .andRoute(POST("/api/sync/upload"), syncHandler::uploadData)
                 .andRoute(GET("/api/sync/download"), syncHandler::downloadData)
-                .andRoute(POST("/api/sync/close-session"), syncHandler::closeSession)
-                // Ruta de prueba para gastos
-                .andRoute(POST("/api/test/expense"), testHandler::createTestExpense);
+                .andRoute(POST("/api/sync/close-session"), syncHandler::closeSession);
     }
 }

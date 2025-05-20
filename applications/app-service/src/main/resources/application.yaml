@@ -1,5 +1,5 @@
 server:
-  port: 8080
+  port: 8081
 spring:
   application:
     name: "GGastos"
@@ -13,7 +13,7 @@ spring:
     active: "local"
   data:
     mongodb:
-      uri: "mongodb://mongo:josVTGQVOVyOauEfYUEQYmostzfNmJqF@yamabiko.proxy.rlwy.net:33234"
+      uri: "mongodb://admin:password@localhost:27017"
       database: "ggastos-db"
       auto-index-creation: true
 jwt:
@@ -35,7 +35,3 @@ management:
         enabled: true
 cors:
   allowed-origins: "http://localhost:4200,http://localhost:8080,http://localhost:3000/,https://gastosreactvite-production.up.railway.app/"
-
-logging:
-  level:
-    dev.yerid: ERROR  # Your specific package
