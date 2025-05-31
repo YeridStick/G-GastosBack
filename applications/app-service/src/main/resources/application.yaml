@@ -13,8 +13,8 @@ spring:
     active: "local"
   data:
     mongodb:
-      uri: "mongodb://admin:password@localhost:27017"
-      database: "ggastos-db"
+      uri: "mongodb://mongo:nUelrKhespUDYGIYMCqQTkBIamFvnRuT@mongodb.railway.internal:27017"
+      database: "mongo"
       auto-index-creation: true
 jwt:
   secret: "${JWT_SECRET:BU4B1nghWq7ddqXkVeJD_seguro_para_jwt_de_32_caracteres}"
