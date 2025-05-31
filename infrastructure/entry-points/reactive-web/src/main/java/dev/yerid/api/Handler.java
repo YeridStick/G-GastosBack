@@ -1,5 +1,6 @@
 package dev.yerid.api;
 
+import dev.yerid.model.email.Notification;
 import dev.yerid.model.user.UserType;
 import dev.yerid.usecase.authenticate.AuthenticateUseCase;
 import dev.yerid.usecase.emailverification.EmailVerificationUseCase;
@@ -64,6 +65,27 @@ public class Handler {
                 );
     }
 
+    public Mono<ServerResponse> sentNotification(ServerRequest request) {
+        return  request.bodyToMono(Notification.class)
+                .flatMap(notification ->
+                        emailVerificationUseCase.sendNotification(notification)
+                                .then(ServerResponse.ok()
+                                        .bodyValue(new NotificationResponse(
+                                                true,
+                                                "Notificación enviada correctamente",
+                                                "SUCCESS",
+                                                notification.getEmail()
+                                        )))
+                                .onErrorResume(e -> ServerResponse.badRequest()
+                                        .bodyValue(new NotificationResponse(
+                                                false,
+                                                "Error al enviar notificación: " + e.getMessage(),
+                                                null,
+                                                notification.getEmail()
+                                        )))
+                );
+    }
+
 
     public Mono<ServerResponse> verifyCodeAndLogin(ServerRequest request) {
         return request.bodyToMono(VerificationRequest.class)
@@ -104,4 +126,11 @@ public class Handler {
     }
 
     record ErrorResponse(String message) {}
+
+    record NotificationResponse(
+            boolean success,
+            String message,
+            String result,
+            String emailSentTo
+    ) {}
 }

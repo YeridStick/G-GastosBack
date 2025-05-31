@@ -34,4 +34,4 @@ management:
       probes:
         enabled: true
 cors:
-  allowed-origins: "http://localhost:4200,http://localhost:8080,http://localhost:3000/,https://gastosreactvite-production.up.railway.app/"
+  allowed-origins: "http://localhost:4200,http://gastosreactvite-production.up.railway.app/,http://localhost:3000/,https://gastosreactvite-production.up.railway.app/,http://192.168.80.26:3000/"

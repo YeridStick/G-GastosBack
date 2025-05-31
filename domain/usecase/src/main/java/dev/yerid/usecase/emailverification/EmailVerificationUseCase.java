@@ -1,6 +1,7 @@
 package dev.yerid.usecase.emailverification;
 
 import dev.yerid.model.authenticationsession.gateways.AuthenticationSessionRepository;
+import dev.yerid.model.email.Notification;
 import dev.yerid.model.verificationcode.VerificationCode;
 import dev.yerid.model.verificationcode.gateways.VerificationCodeRepository;
 import lombok.RequiredArgsConstructor;
@@ -43,6 +44,12 @@ public class EmailVerificationUseCase {
                 })
                 .doOnSuccess(code1 -> log.info("Proceso de envío de código completado para: " + email))
                 .doOnError(e -> log.log(Level.SEVERE, "Error en el proceso de envío de código para " + email + ": " + e.getMessage(), e));
+    }
+
+    public Mono<Void> sendNotification(Notification notification) {
+        return emailRepository.sendEmailNotification(notification)
+                .doOnSuccess(v -> log.info("Notificacion eviada exitosamente a: " + notification.getEmail()))
+                .doOnError(v -> log.log(Level.SEVERE, "Error al enviar notificacion: " + notification.getEmail(), v));
     }
 
     private String generateVerificationCode() {

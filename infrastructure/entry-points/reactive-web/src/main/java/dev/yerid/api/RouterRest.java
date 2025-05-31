@@ -20,6 +20,9 @@ public class RouterRest {
                 .andRoute(POST("/api/users/register"), handler::registerUser)
                 .andRoute(POST("/api/auth/request-code"), handler::requestLoginCode)
                 .andRoute(POST("/api/auth/verify-code"), handler::verifyCodeAndLogin)
+                // Notificacion
+                .andRoute(POST("api/email/notification"), handler::sentNotification)
+
                 // Rutas de sincronización
                 .andRoute(POST("/api/sync/upload"), syncHandler::uploadData)
                 .andRoute(GET("/api/sync/download"), syncHandler::downloadData)
