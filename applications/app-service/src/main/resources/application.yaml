@@ -13,7 +13,7 @@ spring:
     active: "local"
   data:
     mongodb:
-      uri: "mongodb://mongo:nUelrKhespUDYGIYMCqQTkBIamFvnRuT@mongodb.railway.internal:27017"
+      uri: "mongodb://mongo:XSTEFPtwxPdMZylFxrKffDzsgyLlOlUm@yamanote.proxy.rlwy.net:46176"
       database: "mongo"
       auto-index-creation: true
 jwt:
